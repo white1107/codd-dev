@@ -245,6 +245,8 @@ def _detect_language(project_root: Path, exclude_patterns: list[str]) -> str:
 def _detect_source_dirs(project_root: Path, language: str) -> list[str]:
     """Auto-detect source directories."""
     candidates = ["src", "lib", "app", "pkg", "cmd", "internal"]
+    if language == "swift":
+        candidates = ["Sources", "src", "lib", "app"] + candidates
     found = []
 
     for c in candidates:
@@ -275,11 +277,16 @@ def _detect_source_dirs(project_root: Path, language: str) -> list[str]:
 
 def _detect_test_dirs(project_root: Path) -> list[str]:
     """Auto-detect test directories."""
-    candidates = ["tests", "test", "spec", "__tests__"]
+    candidates = ["tests", "test", "spec", "__tests__", "Tests"]
     found = []
     for c in candidates:
         if (project_root / c).is_dir():
             found.append(c)
+    # Swift/Xcode: directories ending with "Tests" (e.g. KhmerVocabTests)
+    if not found:
+        for item in project_root.iterdir():
+            if item.is_dir() and item.name.endswith("Tests") and item.name not in found:
+                found.append(item.name)
     return found
 
 

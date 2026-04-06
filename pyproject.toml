@@ -68,3 +68,8 @@ include = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["codd"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

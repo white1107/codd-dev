@@ -62,10 +62,18 @@ def init(project_name: str, language: str, dest: str, requirements: str | None, 
     (codd_dir / "reports").mkdir(parents=True)
     (codd_dir / "scan").mkdir(exist_ok=True)
 
+    # Auto-detect source and test directories
+    from codd.extractor import _detect_source_dirs, _detect_test_dirs
+    detected_test = _detect_test_dirs(dest_path)
+    detected_src = [d for d in _detect_source_dirs(dest_path, language) if d not in detected_test]
+
     # Copy templates
     _render_template("codd.yaml.tmpl", codd_dir / "codd.yaml", {
         "project_name": project_name,
         "language": language,
+        "source_dirs": "\n".join(f'    - "{d}/"' for d in detected_src),
+        "test_dirs": "\n".join(f'    - "{d}/"' for d in detected_test) if detected_test else '    - "tests/"',
+        "exclude_patterns": _default_excludes(language),
     })
     _render_template("gitignore.tmpl", codd_dir / ".gitignore", {})
 
@@ -814,6 +822,21 @@ def hooks_run_pre_commit(path: str):
 
     project_root = Path(path).resolve()
     raise SystemExit(run_pre_commit(project_root))
+
+
+def _default_excludes(language: str) -> str:
+    """Return default exclude patterns for codd.yaml based on language."""
+    common = ['    - "**/dist/**"']
+    lang_specific = {
+        "python": ['    - "**/__pycache__/**"', '    - "**/.venv/**"'],
+        "typescript": ['    - "**/node_modules/**"'],
+        "javascript": ['    - "**/node_modules/**"'],
+        "swift": ['    - "**/.build/**"', '    - "**/DerivedData/**"', '    - "**/*.xcodeproj/**"'],
+        "go": ['    - "**/vendor/**"'],
+        "java": ['    - "**/target/**"', '    - "**/.gradle/**"'],
+    }
+    lines = lang_specific.get(language, ['    - "**/node_modules/**"', '    - "**/__pycache__/**"'])
+    return "\n".join(lines + common)
 
 
 def _render_template(template_name: str, dest: Path, variables: dict):

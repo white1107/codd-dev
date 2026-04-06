@@ -11,16 +11,14 @@ coding_principles: null
 
 scan:
   source_dirs:
-    - "src/"
+{{source_dirs}}
   test_dirs:
-    - "tests/"
+{{test_dirs}}
   doc_dirs:
     - "docs/"
   config_files: []
   exclude:
-    - "**/node_modules/**"
-    - "**/__pycache__/**"
-    - "**/dist/**"
+{{exclude_patterns}}
 
 graph:
   store: "jsonl"
