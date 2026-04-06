@@ -29,7 +29,7 @@ def main():
 
 @main.command()
 @click.option("--project-name", prompt="Project name", help="Name of the project")
-@click.option("--language", prompt="Primary language", help="Primary language (python/typescript/javascript/go — full support; java — symbols only)")
+@click.option("--language", prompt="Primary language", help="Primary language (python/typescript/javascript/go/swift — full support; java — symbols only)")
 @click.option("--dest", default=".", help="Destination directory (default: current dir)")
 @click.option(
     "--requirements",

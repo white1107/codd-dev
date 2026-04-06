@@ -2,6 +2,16 @@
 
 All notable changes to CoDD are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Swift / iOS language support** — symbol extraction (class, struct, enum, protocol, actor, func), import parsing (`import`, `@testable import`, submodule imports), Swift stdlib filter (50+ Apple frameworks), code pattern detection (SwiftUI views, SwiftData/CoreData models, Observable state, networking)
+- **Swift cross-file type reference detection** — 2-pass regex scan detects dependencies between Swift files in the same module (where `import` is not required)
+- **`Package.swift` dependency parsing** — extracts SPM package dependencies in `BuildDepsExtractor`
+- **Swift test file detection** — supports both XCTest (`func testFoo`) and Swift Testing (`@Test func foo`) frameworks
+- **`codd init` auto-detection for Swift** — detects `Sources/`, Xcode target directories, `*Tests/` directories, and sets language-specific excludes (`.build`, `DerivedData`, `.xcodeproj`)
+
 ## [1.2.1] - 2026-04-01
 
 ### Fixed

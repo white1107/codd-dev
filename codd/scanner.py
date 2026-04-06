@@ -462,6 +462,8 @@ def _detect_swift_type_references(ceg: CEG, project_root: Path, src_dir: Path,
                 if re.search(rf'\b{re.escape(type_name)}\b', content):
                     target_id = f"file:{target_rel}"
                     edge_id = ceg.add_edge(source_id, target_id, "references", "structural")
+                    # 0.75: lower than import-based (0.90/0.95) because name
+                    # matching may produce false positives (e.g. common names).
                     ceg.add_evidence(edge_id, "static", "type_reference", 0.75)
                     ref_count += 1
                     break  # one edge per file pair is enough

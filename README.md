@@ -66,6 +66,7 @@ CoDD is **harness-agnostic** — works with Claude Code, Copilot, Cursor, or any
 | Next.js + Supabase | vitest + Playwright | None |
 | FastAPI + Python | pytest + httpx | None |
 | CLI tool in Go | go test | None |
+| iOS app in Swift | XCTest / Swift Testing | None |
 
 **Upstream determines downstream.** You define requirements and constraints. AI derives everything else.
 
