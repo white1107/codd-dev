@@ -340,6 +340,7 @@ def _scan_source_directory(ceg: CEG, project_root: Path, src_dir: Path,
         "javascript": [".js", ".jsx"],
         "java": [".java"],
         "go": [".go"],
+        "swift": [".swift"],
     }
     exts = extensions.get(language, [])
 
@@ -360,6 +361,10 @@ def _scan_source_directory(ceg: CEG, project_root: Path, src_dir: Path,
 
     if file_count > 0:
         print(f"  Source: {file_count} {language} files in {src_dir.relative_to(project_root)}")
+
+    # Phase 2b: For Swift, detect type references across files (same-module deps)
+    if language == "swift" and file_count > 1:
+        _detect_swift_type_references(ceg, project_root, src_dir, exclude_patterns)
 
 
 def _extract_imports_basic(ceg: CEG, project_root: Path, src_dir: Path, file_path: Path,
@@ -405,6 +410,64 @@ def _extract_imports_basic(ceg: CEG, project_root: Path, src_dir: Path, file_pat
             ceg.upsert_node(target_id, "module", name=target_module)
             edge_id = ceg.add_edge(source_id, target_id, "imports", "structural")
             ceg.add_evidence(edge_id, "static", "ast_import", 0.90)
+
+    elif language == "swift":
+        for target_module in internal:
+            target_id = f"module:{target_module}"
+            ceg.upsert_node(target_id, "module", name=target_module)
+            edge_id = ceg.add_edge(source_id, target_id, "imports", "structural")
+            ceg.add_evidence(edge_id, "static", "ast_import", 0.90)
+
+
+def _detect_swift_type_references(ceg: CEG, project_root: Path, src_dir: Path,
+                                   exclude_patterns: list):
+    """Detect cross-file type references in Swift (same-module, no import needed).
+
+    Pass 1: Collect all type symbols (class/struct/enum/protocol/actor) per file.
+    Pass 2: For each file, check if other files' type names appear in its content.
+    """
+    from codd.extractor import _extract_symbols
+
+    # Pass 1: gather type symbols per file
+    file_symbols: dict[str, list[str]] = {}  # rel_path -> [TypeName, ...]
+    file_contents: dict[str, str] = {}
+
+    for root, dirs, files in os.walk(src_dir):
+        for fname in files:
+            if not fname.endswith(".swift"):
+                continue
+            full = Path(root) / fname
+            rel = full.relative_to(project_root).as_posix()
+            if any(_match_glob(rel, pat) for pat in exclude_patterns):
+                continue
+            try:
+                content = full.read_text(errors="ignore")
+            except Exception:
+                continue
+            file_contents[rel] = content
+            symbols = _extract_symbols(content, rel, "swift")
+            # Only collect type-level symbols (not functions)
+            type_names = [s.name for s in symbols if s.kind == "class"]
+            file_symbols[rel] = type_names
+
+    # Pass 2: detect references
+    ref_count = 0
+    for source_rel, content in file_contents.items():
+        source_id = f"file:{source_rel}"
+        for target_rel, type_names in file_symbols.items():
+            if target_rel == source_rel:
+                continue
+            for type_name in type_names:
+                # Match word boundary: TypeName( or TypeName. or : TypeName or <TypeName>
+                if re.search(rf'\b{re.escape(type_name)}\b', content):
+                    target_id = f"file:{target_rel}"
+                    edge_id = ceg.add_edge(source_id, target_id, "references", "structural")
+                    ceg.add_evidence(edge_id, "static", "type_reference", 0.75)
+                    ref_count += 1
+                    break  # one edge per file pair is enough
+
+    if ref_count > 0:
+        print(f"  Type references: {ref_count} cross-file edges detected")
 
 
 # ═══════════════════════════════════════════════════════════

@@ -223,7 +223,7 @@ def _detect_language(project_root: Path, exclude_patterns: list[str]) -> str:
     ext_map = {
         ".py": "python", ".ts": "typescript", ".tsx": "typescript",
         ".js": "javascript", ".jsx": "javascript",
-        ".java": "java", ".go": "go",
+        ".java": "java", ".go": "go", ".swift": "swift",
     }
 
     for root, dirs, files in os.walk(project_root):
@@ -290,6 +290,7 @@ def _language_extensions(language: str) -> set[str]:
         "javascript": {".js", ".jsx"},
         "java": {".java"},
         "go": {".go"},
+        "swift": {".swift"},
     }.get(language, set())
 
 
@@ -430,6 +431,12 @@ def _file_to_module(rel_path: str, project_root: Path, src_dir: Path,
             return parts[0]
         return "root"
 
+    elif language == "swift":
+        parts = list(rel_to_src.parts)
+        if parts:
+            return parts[0]
+        return "root"
+
     return rel_to_src.parts[0] if rel_to_src.parts else "root"
 
 
@@ -475,6 +482,27 @@ def _extract_symbols(content: str, rel_path: str, language: str) -> list[Symbol]
                 symbols.append(Symbol(m.group(1), "class", rel_path, i))
             m = re.match(r'^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(([^)]*)\)', line)
             if m and m.group(1)[0].isupper():
+                symbols.append(Symbol(m.group(1), "function", rel_path, i, m.group(2).strip()))
+
+    elif language == "swift":
+        for i, line in enumerate(content.splitlines(), 1):
+            # class, struct, enum, protocol, actor
+            m = re.match(
+                r'^\s*(?:public\s+|open\s+|internal\s+|private\s+|fileprivate\s+)?'
+                r'(?:final\s+)?'
+                r'(class|struct|enum|protocol|actor)\s+(\w+)', line)
+            if m:
+                kind = m.group(1)
+                name = m.group(2)
+                symbol_type = "class" if kind in ("class", "actor") else "class"
+                symbols.append(Symbol(name, symbol_type, rel_path, i))
+            # func (top-level and methods)
+            m = re.match(
+                r'^\s*(?:public\s+|open\s+|internal\s+|private\s+|fileprivate\s+)?'
+                r'(?:static\s+|class\s+)?'
+                r'(?:override\s+)?'
+                r'func\s+(\w+)\s*\(([^)]*)\)', line)
+            if m:
                 symbols.append(Symbol(m.group(1), "function", rel_path, i, m.group(2).strip()))
 
     return symbols
@@ -559,6 +587,27 @@ def _extract_imports(content: str, language: str, project_root: Path,
                     pkg = m.group(1)
                     external.add(pkg.split("/")[-1])
 
+    elif language == "swift":
+        for line in content.splitlines():
+            # import Foundation / import struct Foo.Bar / @testable import Foo
+            m = re.match(
+                r'^\s*(?:@testable\s+)?import\s+'
+                r'(?:(?:struct|class|enum|protocol|func|var|let|typealias)\s+)?'
+                r'(\w+(?:\.\w+)*)', line)
+            if not m:
+                continue
+            module = m.group(1).split(".")[0]
+            # Check if module corresponds to an internal source directory
+            is_internal = False
+            for sd in [src_dir] + [project_root / d for d in ("Sources", "src", "lib") if (project_root / d).is_dir()]:
+                if (sd / module).is_dir():
+                    is_internal = True
+                    break
+            if is_internal:
+                internal.setdefault(module, []).append(line.strip())
+            else:
+                external.add(module)
+
     # Remove stdlib-like imports from external
     external -= _common_stdlib(language)
 
@@ -582,6 +631,24 @@ def _common_stdlib(language: str) -> set[str]:
             "__future__", "builtins", "types", "operator", "fnmatch", "glob",
             "signal", "mmap", "ctypes", "platform", "sysconfig", "site",
             "concurrent", "asyncio", "selectors", "ssl", "ftplib", "smtplib",
+        }
+    if language == "swift":
+        return {
+            "Foundation", "UIKit", "SwiftUI", "Combine", "CoreData",
+            "CoreGraphics", "CoreLocation", "MapKit", "AVFoundation",
+            "Photos", "PhotosUI", "WebKit", "SafariServices",
+            "StoreKit", "GameKit", "SpriteKit", "SceneKit", "ARKit",
+            "RealityKit", "Metal", "MetalKit", "Vision", "NaturalLanguage",
+            "CoreML", "CreateML", "WidgetKit", "AppIntents", "SwiftData",
+            "Observation", "os", "Darwin", "Dispatch", "ObjectiveC",
+            "XCTest", "Testing", "Swift", "PlaygroundSupport",
+            "CoreImage", "CoreText", "CoreFoundation", "Security",
+            "LocalAuthentication", "CryptoKit", "Network", "MultipeerConnectivity",
+            "UserNotifications", "CloudKit", "CoreBluetooth", "CoreMotion",
+            "CoreTelephony", "SystemConfiguration", "Accessibility",
+            "UniformTypeIdentifiers", "QuickLook", "LinkPresentation",
+            "AuthenticationServices", "PassKit", "HealthKit",
+            "Intents", "IntentsUI", "ActivityKit", "TipKit",
         }
     return set()
 
@@ -638,6 +705,13 @@ def _guess_test_target(test_filename: str, language: str) -> str | None:
             if name.endswith(suffix):
                 return name[: -len(suffix)]
 
+    elif language == "swift":
+        # FooTests → Foo
+        if name.endswith("Tests"):
+            return name[:-5]
+        if name.endswith("Test"):
+            return name[:-4]
+
     return None
 
 
@@ -676,6 +750,11 @@ def _detect_patterns(facts: ProjectFacts, project_root: Path):
     if go_mod.exists():
         content = go_mod.read_text(errors="ignore")
         _detect_go_patterns(facts, content)
+
+    package_swift = project_root / "Package.swift"
+    if package_swift.exists():
+        content = package_swift.read_text(errors="ignore")
+        _detect_swift_patterns(facts, content)
 
     # Scan source files for framework-specific patterns
     extractor = get_extractor(facts.language, "source")
@@ -751,6 +830,23 @@ def _detect_go_patterns(facts: ProjectFacts, content: str):
             facts.detected_frameworks.append(name)
 
 
+def _detect_swift_patterns(facts: ProjectFacts, content: str):
+    """Detect Swift package dependencies from Package.swift."""
+    deps = {
+        "Alamofire": "Alamofire", "Moya": "Moya",
+        "Kingfisher": "Kingfisher", "SDWebImage": "SDWebImage",
+        "SnapKit": "SnapKit", "Realm": "Realm",
+        "GRDB": "GRDB", "Firebase": "Firebase",
+        "Vapor": "Vapor", "swift-composable-architecture": "TCA",
+        "swift-dependencies": "swift-dependencies",
+    }
+    for key, name in deps.items():
+        if key in content:
+            facts.detected_frameworks.append(name)
+    if "XCTest" in content or "Testing" in content:
+        facts.detected_test_framework = facts.detected_test_framework or "XCTest"
+
+
 def _detect_code_patterns(mod: ModuleInfo, content: str, language: str):
     """Detect API routes, DB models from source code."""
     if language == "python":
@@ -769,6 +865,18 @@ def _detect_code_patterns(mod: ModuleInfo, content: str, language: str):
         if re.search(r'(?:schema|model)\s*\(', content, re.IGNORECASE):
             mod.patterns["db_models"] = "Database models"
 
+    elif language == "swift":
+        if re.search(r'(?:import\s+SwiftUI|:\s*View\s*\{)', content):
+            mod.patterns["swiftui_views"] = "SwiftUI views"
+        if re.search(r'(?:import\s+SwiftData|@Model)', content):
+            mod.patterns["db_models"] = "SwiftData models"
+        if re.search(r'(?:import\s+CoreData|NSManagedObject)', content):
+            mod.patterns["db_models"] = "CoreData models"
+        if re.search(r'(?:URLSession|URLRequest|async\s+throws\s+->)', content):
+            mod.patterns["networking"] = "Network layer"
+        if re.search(r'@Observable|ObservableObject', content):
+            mod.patterns["state_management"] = "Observable state"
+
 
 def _detect_entry_points(facts: ProjectFacts, project_root: Path, language: str):
     """Find likely entry points (main files)."""
@@ -778,6 +886,7 @@ def _detect_entry_points(facts: ProjectFacts, project_root: Path, language: str)
         "javascript": ["index.js", "main.js", "app.js", "server.js"],
         "java": ["Application.java", "Main.java", "App.java"],
         "go": ["main.go", "cmd/main.go"],
+        "swift": ["App.swift", "main.swift", "ContentView.swift"],
     }
 
     for candidate in candidates.get(language, []):

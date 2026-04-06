@@ -1939,7 +1939,7 @@ class TerraformExtractor:
 class BuildDepsExtractor:
     """Extract build/runtime dependencies from common project manifests."""
 
-    file_names = ("pyproject.toml", "package.json", "go.mod")
+    file_names = ("pyproject.toml", "package.json", "go.mod", "Package.swift")
 
     def detect_build_files(self, project_root: Path) -> list[Path]:
         return [project_root / name for name in self.file_names if (project_root / name).exists()]
@@ -1952,6 +1952,8 @@ class BuildDepsExtractor:
             return self._extract_package_json(content, file_path)
         if normalized == "go.mod":
             return self._extract_go_mod(content, file_path)
+        if normalized == "package.swift":
+            return self._extract_package_swift(content, file_path)
         return BuildDepsInfo(file_path=file_path)
 
     def merge(self, infos: list[BuildDepsInfo]) -> BuildDepsInfo | None:
@@ -2049,6 +2051,25 @@ class BuildDepsExtractor:
             scripts=scripts,
         )
 
+    def _extract_package_swift(self, content: str, file_path: str) -> BuildDepsInfo:
+        """Extract dependencies from Package.swift."""
+        runtime: list[str] = []
+        # Match .package(url: "...", ...) or .package(name: "...", url: "...")
+        for m in re.finditer(r'\.package\s*\([^)]*url:\s*"([^"]+)"', content):
+            url = m.group(1)
+            # Extract repo name from URL: https://github.com/foo/Bar.git → Bar
+            cleaned = url.rstrip("/")
+            if cleaned.endswith(".git"):
+                cleaned = cleaned[:-4]
+            name = cleaned.rsplit("/", 1)[-1]
+            runtime.append(name)
+        return BuildDepsInfo(
+            file_path=file_path,
+            runtime=_dedupe(runtime),
+            dev=[],
+            scripts={},
+        )
+
     def extract_call_graph(self, content: str, file_path: str, symbols: list[Symbol]) -> list[CallEdge]:
         return []
 
@@ -2065,6 +2086,7 @@ class TestExtractor:
             "typescript": {".ts", ".tsx"},
             "javascript": {".js", ".jsx"},
             "go": {".go"},
+            "swift": {".swift"},
         }.get(self.language, set())
         if not suffixes:
             return []
@@ -2082,6 +2104,8 @@ class TestExtractor:
             return self._extract_javascript(content, file_path)
         if self.language == "go":
             return self._extract_go(content, file_path)
+        if self.language == "swift":
+            return self._extract_swift(content, file_path)
         return TestInfo(file_path=file_path)
 
     def _is_test_file(self, filename: str) -> bool:
@@ -2101,6 +2125,8 @@ class TestExtractor:
             )
         if self.language == "go":
             return filename.endswith("_test.go")
+        if self.language == "swift":
+            return filename.endswith("Tests.swift") or filename.endswith("Test.swift")
         return False
 
     def _extract_python(self, content: str, file_path: str) -> TestInfo:
@@ -2138,6 +2164,18 @@ class TestExtractor:
     def _extract_go(self, content: str, file_path: str) -> TestInfo:
         tests = re.findall(r"^\s*func\s+(Test\w+)\s*\(", content, re.MULTILINE)
         fixtures = re.findall(r"^\s*func\s+(TestMain)\s*\(", content, re.MULTILINE)
+        return TestInfo(file_path=file_path, test_functions=tests, fixtures=fixtures)
+
+    def _extract_swift(self, content: str, file_path: str) -> TestInfo:
+        # XCTest: func testFoo()
+        tests = re.findall(r"^\s*func\s+(test\w+)\s*\(", content, re.MULTILINE)
+        # Swift Testing: @Test func foo()
+        tests += re.findall(r"^\s*@Test\b.*?\bfunc\s+(\w+)\s*\(", content, re.MULTILINE)
+        fixtures = []
+        # XCTest lifecycle
+        for name in ("setUp", "tearDown", "setUpWithError", "tearDownWithError"):
+            if re.search(rf"^\s*(?:override\s+)?func\s+{name}\s*\(", content, re.MULTILINE):
+                fixtures.append(name)
         return TestInfo(file_path=file_path, test_functions=tests, fixtures=fixtures)
 
     def extract_call_graph(self, content: str, file_path: str, symbols: list[Symbol]) -> list[CallEdge]:
