@@ -111,6 +111,105 @@ def scan(path: str):
 
 
 @main.command()
+@click.option("--file", default=None, help="Show dependencies for a specific file")
+@click.option("--path", default=".", help="Project root directory")
+@click.option("--reverse", is_flag=True, help="Show reverse dependencies (what depends on this file)")
+def graph(file: str | None, path: str, reverse: bool):
+    """Show dependency graph structure."""
+    from codd.graph import CEG
+    project_root = Path(path).resolve()
+    codd_dir = _require_codd_dir(project_root)
+    scan_dir = codd_dir / "scan"
+
+    ceg = CEG(scan_dir)
+    if not ceg.edges:
+        click.echo("No edges found. Run 'codd scan' first.")
+        return
+
+    # Build adjacency maps
+    depends_on: dict[str, list[str]] = {}
+    depended_by: dict[str, list[str]] = {}
+    for e in ceg.edges:
+        src = e["source_id"].removeprefix("file:")
+        tgt = e["target_id"].removeprefix("file:")
+        depends_on.setdefault(src, []).append(tgt)
+        depended_by.setdefault(tgt, []).append(src)
+
+    all_files = sorted(set(depends_on.keys()) | set(depended_by.keys()))
+
+    if file:
+        matches = [f for f in all_files if file in f]
+        if not matches:
+            click.echo(f"No file matching '{file}' in graph.")
+            return
+        for m in matches:
+            _print_file_deps(m, depends_on, depended_by, reverse)
+    else:
+        _print_full_graph(all_files, depends_on, depended_by)
+
+
+def _print_file_deps(file: str, depends_on: dict, depended_by: dict, reverse: bool):
+    name = file.rsplit("/", 1)[-1]
+    refs_out = depends_on.get(file, [])
+    refs_in = depended_by.get(file, [])
+
+    if reverse:
+        click.echo(f"\n  {name} を変更すると影響するファイル:")
+        if refs_in:
+            for r in sorted(refs_in):
+                click.echo(f"    ← {r.rsplit('/', 1)[-1]}")
+        else:
+            click.echo("    (なし)")
+    else:
+        click.echo(f"\n  {name}")
+        if refs_out:
+            click.echo(f"    uses ({len(refs_out)}):")
+            for r in sorted(refs_out):
+                click.echo(f"      → {r.rsplit('/', 1)[-1]}")
+        if refs_in:
+            click.echo(f"    used by ({len(refs_in)}):")
+            for r in sorted(refs_in):
+                click.echo(f"      ← {r.rsplit('/', 1)[-1]}")
+        if not refs_out and not refs_in:
+            click.echo("    (no dependencies)")
+
+
+def _print_full_graph(all_files: list, depends_on: dict, depended_by: dict):
+    ranked = sorted(
+        [(f, depended_by.get(f, [])) for f in all_files if f in depended_by],
+        key=lambda x: len(x[1]), reverse=True,
+    )
+
+    click.echo("\n  Impact Ranking")
+    click.echo("  ─────────────────────────────────")
+    for f, refs in ranked:
+        name = f.rsplit("/", 1)[-1]
+        bar = "█" * len(refs)
+        click.echo(f"  {bar} {name} ← {len(refs)}")
+
+    click.echo("\n  Dependency Tree")
+    click.echo("  ─────────────────────────────────")
+    for f in all_files:
+        name = f.rsplit("/", 1)[-1]
+        targets = depends_on.get(f, [])
+        if not targets and f not in depended_by:
+            click.echo(f"  {name}  (isolated)")
+            continue
+        click.echo(f"  {name}")
+        for i, t in enumerate(sorted(targets)):
+            prefix = "└── " if i == len(targets) - 1 else "├── "
+            click.echo(f"    {prefix}{t.rsplit('/', 1)[-1]}")
+
+    leaf = sorted(set(all_files) - set(depended_by.keys()))
+    if leaf:
+        click.echo("\n  Safe to change (no dependents)")
+        click.echo("  ─────────────────────────────────")
+        for f in leaf:
+            click.echo(f"  ○ {f.rsplit('/', 1)[-1]}")
+    click.echo()
+
+
+@main.command()
 @click.option("--diff", default="HEAD", help="Git diff target (default: HEAD, shows uncommitted changes)")
 @click.option("--path", default=".", help="Project root directory")
 @click.option("--output", default=None, help="Output file (default: stdout)")
